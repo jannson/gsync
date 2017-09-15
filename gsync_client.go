@@ -64,6 +64,10 @@ func (bt *BlockTableSlice) Put(c BlockSignature) {
 	bt.s = append(bt.s, c)
 }
 
+func (bt *BlockTableSlice) Len() int {
+	return len(bt.ss)
+}
+
 func (bt *BlockTableSlice) Get(weak uint32) ([]BlockSignature, bool) {
 	i := sort.Search(len(bt.ss), func(i int) bool { return bt.ss[i][0].Weak >= weak })
 	if i < len(bt.ss) && bt.ss[i][0].Weak == weak {
@@ -73,6 +77,10 @@ func (bt *BlockTableSlice) Get(weak uint32) ([]BlockSignature, bool) {
 }
 
 func (bt *BlockTableSlice) Done() {
+	if len(bt.s) <= 0 {
+		return
+	}
+
 	sort.Sort(bt.s)
 	old := bt.s[0]
 	olds := make([]BlockSignature, 1)
@@ -101,8 +109,12 @@ func (bt *BlockTableSlice) Done() {
 // wether to send or not a block of data.
 func LookUpTable(ctx context.Context, bc <-chan BlockSignature) (BlockTable, error) {
 	//table := make(map[uint32][]BlockSignature)
-	table := &BlockTableMap{
+	/*table := &BlockTableMap{
 		tbl: make(map[uint32][]BlockSignature),
+	}*/
+	table := &BlockTableSlice{
+		s:  BlockSignatureSlice(make([]BlockSignature, 0)),
+		ss: make([][]BlockSignature, 0),
 	}
 
 	for c := range bc {

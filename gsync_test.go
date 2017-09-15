@@ -95,14 +95,14 @@ func TestSync(t *testing.T) {
 	}{
 		{
 			"full sync, no cache, 2mb file",
-			srand(10, (2*1024)*1024),
+			srand(10, (2*4*1024)*1024),
 			nil,
 			md5.New(),
 		},
 		{
 			"partial sync, 1mb cached, 2mb file",
-			srand(20, (2*1024)*1024),
-			srand(20, (1*1024)*1024),
+			srand(20, (2*4*1024)*1024),
+			srand(20, (1*4*1024)*1024),
 			md5.New(),
 		},
 	}
@@ -124,7 +124,7 @@ func TestSync(t *testing.T) {
 			fmt.Print("LookUpTable... ")
 			cacheSigs, err := LookUpTable(ctx, sigsCh)
 			assert.Ok(t, err)
-			fmt.Printf("%d blocks found in cache. done\n", len(cacheSigs))
+			fmt.Printf("%d blocks found in cache. done\n", cacheSigs.Len())
 
 			fmt.Print("Sync... ")
 			opsCh, err := Sync(ctx, bytes.NewReader(tt.source), tt.h, cacheSigs)
