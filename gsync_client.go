@@ -11,14 +11,100 @@ import (
 	"fmt"
 	"hash"
 	"io"
+	"sort"
 
 	"github.com/pkg/errors"
 )
 
+type BlockSignatureSlice []BlockSignature
+
+type BlockTable interface {
+	Put(c BlockSignature)
+	Get(weak uint32) ([]BlockSignature, bool)
+	Done()
+	Len() int
+}
+
+type BlockTableMap struct {
+	tbl map[uint32][]BlockSignature
+}
+
+type BlockTableSlice struct {
+	s  BlockSignatureSlice
+	ss [][]BlockSignature
+}
+
+func (bt *BlockTableMap) Put(c BlockSignature) {
+	bt.tbl[c.Weak] = append(bt.tbl[c.Weak], c)
+}
+
+func (bt *BlockTableMap) Get(weak uint32) ([]BlockSignature, bool) {
+	bs, ok := bt.tbl[weak]
+	return bs, ok
+}
+
+func (bt *BlockTableMap) Done() {
+}
+
+func (bt *BlockTableMap) Len() int {
+	return len(bt.tbl)
+}
+
+func (bs BlockSignatureSlice) Len() int {
+	return len(bs)
+}
+func (bs BlockSignatureSlice) Swap(i, j int) {
+	bs[i], bs[j] = bs[j], bs[i]
+}
+func (bs BlockSignatureSlice) Less(i, j int) bool {
+	return bs[i].Weak < bs[j].Weak
+}
+
+func (bt *BlockTableSlice) Put(c BlockSignature) {
+	bt.s = append(bt.s, c)
+}
+
+func (bt *BlockTableSlice) Get(weak uint32) ([]BlockSignature, bool) {
+	i := sort.Search(len(bt.ss), func(i int) bool { return bt.ss[i][0].Weak >= weak })
+	if i < len(bt.ss) && bt.ss[i][0].Weak == weak {
+		return bt.ss[i], true
+	}
+	return nil, false
+}
+
+func (bt *BlockTableSlice) Done() {
+	sort.Sort(bt.s)
+	old := bt.s[0]
+	olds := make([]BlockSignature, 1)
+	olds[0] = old
+
+	for i := 1; i < len(bt.s); i++ {
+		if old.Weak == bt.s[i].Weak {
+			olds = append(olds, bt.s[i])
+		} else {
+			bt.ss = append(bt.ss, olds)
+			olds = make([]BlockSignature, 1)
+			old = bt.s[i]
+			olds[0] = old
+		}
+	}
+
+	if len(olds) > 0 {
+		bt.ss = append(bt.ss, olds)
+	}
+
+	//reset
+	bt.s = nil
+}
+
 // LookUpTable reads up blocks signatures and builds a lookup table for the client to search from when trying to decide
 // wether to send or not a block of data.
-func LookUpTable(ctx context.Context, bc <-chan BlockSignature) (map[uint32][]BlockSignature, error) {
-	table := make(map[uint32][]BlockSignature)
+func LookUpTable(ctx context.Context, bc <-chan BlockSignature) (BlockTable, error) {
+	//table := make(map[uint32][]BlockSignature)
+	table := &BlockTableMap{
+		tbl: make(map[uint32][]BlockSignature),
+	}
+
 	for c := range bc {
 		select {
 		case <-ctx.Done():
@@ -31,8 +117,11 @@ func LookUpTable(ctx context.Context, bc <-chan BlockSignature) (map[uint32][]Bl
 			fmt.Printf("gsync: checksum error: %#v\n", c.Error)
 			continue
 		}
-		table[c.Weak] = append(table[c.Weak], c)
+		//table[c.Weak] = append(table[c.Weak], c)
+		table.Put(c)
 	}
+
+	table.Done()
 
 	return table, nil
 }
@@ -43,7 +132,7 @@ func LookUpTable(ctx context.Context, bc <-chan BlockSignature) (map[uint32][]Bl
 // so this function is expected to be called once the remote blocks map is fully populated.
 //
 // The caller must make sure the concrete reader instance is not nil or this function will panic.
-func Sync(ctx context.Context, r io.ReaderAt, shash hash.Hash, remote map[uint32][]BlockSignature) (<-chan BlockOperation, error) {
+func Sync(ctx context.Context, r io.ReaderAt, shash hash.Hash, remote BlockTable) (<-chan BlockOperation, error) {
 	if r == nil {
 		return nil, errors.New("gsync: reader required")
 	}
@@ -96,7 +185,7 @@ func Sync(ctx context.Context, r io.ReaderAt, shash hash.Hash, remote map[uint32
 			block := buffer[:n]
 
 			// If there are no block signatures from remote server, send all data blocks
-			if len(remote) == 0 {
+			if remote.Len() == 0 {
 				if n > 0 {
 					o <- BlockOperation{Data: block}
 					offset += int64(n)
@@ -116,7 +205,7 @@ func Sync(ctx context.Context, r io.ReaderAt, shash hash.Hash, remote map[uint32
 				r1, r2, rhash = rollingHash(block)
 			}
 
-			if bs, ok := remote[rhash]; ok {
+			if bs, ok := remote.Get(rhash); ok {
 				shash.Reset()
 				shash.Write(block)
 				s := shash.Sum(nil)
